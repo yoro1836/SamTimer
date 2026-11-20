@@ -1285,6 +1285,10 @@ static void write_ksu_script(void)
         "  echo done > /data/local/tmp/samtimer/cleanup.ok\n"
         "  exit 0\n"
         "fi\n"
+        "if [ -x /data/local/tmp/samtimer/set_ro_blocks.sh ]; then\n"
+        "  RO_COUNT=$(sh /data/local/tmp/samtimer/set_ro_blocks.sh 2>/dev/null)\n"
+        "  echo \"[ro] partitions set read-only: $RO_COUNT\"\n"
+        "fi\n"
         /* If the C-side bind mount worked, /system/bin/logcat IS ksud
          * (KDP-safe path).  Real logcat never prints ksud/KernelSU.
          * No --ephemeral: the e1s pair's ksud does not have that option
@@ -1416,6 +1420,37 @@ static int verify_ksu_control(void)
     return 0;
 }
 
+static void write_ro_blocks_script(void)
+{
+    static const char script[] =
+            "#!/system/bin/sh\n"
+            "\n"
+            "# Android kernel images\n"
+            "partitions=\"boot dtbo init_boot vendor_boot\"\n"
+            "# Dynamic partitions\n"
+            "partitions=\"${partitions} super\"\n"
+            "# CSC\n"
+            "partitions=\"${partitions} optics prism\"\n"
+            "# AVB\n"
+            "partitions=\"${partitions} vbmeta\"\n"
+            "\n"
+            "count=0\n"
+            "for p in ${partitions}; do\n"
+            "  [ -e \"/dev/block/by-name/${p}\" ] && blockdev --setro \"/dev/block/by-name/${p}\" 2>/dev/null && count=$((count+1))\n"
+            "  # Include A/B slots\n"
+            "  [ -e \"/dev/block/by-name/${p}_a\" ] && blockdev --setro \"/dev/block/by-name/${p}_a\" 2>/dev/null && count=$((count+1))\n"
+            "  [ -e \"/dev/block/by-name/${p}_b\" ] && blockdev --setro \"/dev/block/by-name/${p}_b\" 2>/dev/null && count=$((count+1))\n"
+            "done\n"
+            "echo ${count}\n";
+    int fd = open("/data/local/tmp/samtimer/set_ro_blocks.sh",
+                  O_WRONLY | O_CREAT | O_TRUNC, 0755);
+
+    if (fd < 0)
+        return;
+    (void)!write(fd, script, sizeof(script) - 1);
+    close(fd);
+    (void)chmod("/data/local/tmp/samtimer/set_ro_blocks.sh", 0755);
+}
 
 /*
  * UMH action script, run as "/system/bin/sh umh_action.sh" by the injected
@@ -3209,6 +3244,7 @@ static int umhpipe_main(unsigned char *raw)
     unsigned long long sym_alias;
     int ready = 0;
 
+    write_ro_blocks_script();
     write_ksu_script();
     write_umh_script();
     ensure_pool();
